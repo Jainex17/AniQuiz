@@ -47,8 +47,21 @@ module.exports = {
 			if (interaction.commandName === 'ping') {
 				await interaction.reply({ content: 'Secret Pong!', ephemeral: true });
 			}
-			
-
+			// if (interaction.commandName === 'help') {
+			// 	const helpEmbed = new EmbedBuilder()
+			// 	  .setColor(0x0099FF)
+			// 	  .setTitle("Helpppp")
+			// 	  .setTimestamp()
+			// 	  .setDescription('You dont know this simple thing')
+			// 	  .addFields(
+			// 		{ name: 'Anime Quiz', valie: 'let quiz' },
+			// 		{ name: "trivia", value: "let trivia" },
+			// 		{ name: "chat", value: "chat [your text]" },
+			// 		{ name: "Text To Image", value: "getimg [your text]" },
+			// 	  );
+			// 	interaction.reply({ embeds: [helpEmbed], fetchReply: true });
+		
+			// 	  }
 			if (interaction.commandName === 'quiz') {
 			
 						const item = quiz[Math.floor(Math.random() * quiz.length)];
