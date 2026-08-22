@@ -1,20 +1,36 @@
 const express = require("express");
 const app = express();
-const fetch = require("node-fetch");
-// put online
-app.listen(3000, () => {
-  console.log("Project is running!");
-});
+const fs = require("node:fs");
+const path = require("node:path");
+const { Client, Collection, GatewayIntentBits, AttachmentBuilder } = require("discord.js");
+const quiz = require("./quiz.json");
+
+// ---- config: env vars first (Render), config.json fallback (local dev) ----
+let token = process.env.DISCORD_TOKEN;
+let GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+try {
+  const cfg = require("./config.json");
+  token = token || cfg.token;
+  GEMINI_API_KEY = GEMINI_API_KEY || cfg.GEMINI_API_KEY || cfg.OPENAI_API_KEY;
+} catch {}
+
+if (!token) {
+  console.error(
+    "No bot token found!\n" +
+      "Set DISCORD_TOKEN env var (Render) or create config.json with { \"token\": \"...\", \"GEMINI_API_KEY\": \"...\" }"
+  );
+  process.exit(1);
+}
+
+// ---- web server (keeps Render free service alive when pinged) ----
 app.get("/", (req, res) => {
   res.send("bot runing!");
 });
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Project is running!");
+});
 
-const fs = require("node:fs");
-const path = require("node:path");
-const { token, OPENAI_API_KEY } = require("./config.json");
-const { Client, Collection, GatewayIntentBits, Events } = require("discord.js");
-const quiz = require("./quiz.json");
-
+// ---- discord client ----
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -22,13 +38,6 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
 });
-
-// // chat bot
-const { Configuration, OpenAIApi } = require("openai");
-const configuration = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-const openai = new OpenAIApi(configuration);
 
 //get commands files from commands folder
 client.commands = new Collection();
@@ -70,6 +79,57 @@ let prefix = "let ";
 let chatPrefix = "chat ";
 let imgPrefix = "giveimg ";
 
+// ---- gemini helpers (free tier, plain REST - no SDK needed) ----
+async function geminiChat(prompt) {
+  const res = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [
+            {
+              text: "You are Aniquiz, a friendly anime-loving Discord bot. Keep answers short and fun (max ~100 words).",
+            },
+          ],
+        },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      }),
+    }
+  );
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error(JSON.stringify(data).slice(0, 300));
+  return text;
+}
+
+async function geminiImage(prompt) {
+  const res = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      }),
+    }
+  );
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      return Buffer.from(part.inlineData.data, "base64");
+    }
+  }
+  throw new Error(JSON.stringify(data).slice(0, 300));
+}
 
 client.on("messageCreate", async (message) => {
   let msg = message.content;
@@ -99,107 +159,81 @@ client.on("messageCreate", async (message) => {
     }
     // normal quiz
     if (command === "trivia") {
-      const responce = await fetch("https://opentdb.com/api.php?amount=1&category=31&difficulty=easy&type=boolean");
-      const data = await responce.json();
+      try {
+        const responce = await fetch("https://opentdb.com/api.php?amount=1&category=31&difficulty=easy&type=boolean");
+        const data = await responce.json();
 
-      const getq = data.results[0]["question"];
-      const p1 = /&quot;/gi;
-      const p2 = /&#039;/gi;
-      const p3 = /&eacute;/gi;
+        const getq = data.results[0]["question"];
+        const p1 = /&quot;/gi;
+        const p2 = /&#039;/gi;
+        const p3 = /&eacute;/gi;
 
-      const q = getq.replace(p1, '"').replace(p2, "'").replace(p3, "é");
+        const q = getq.replace(p1, '"').replace(p2, "'").replace(p3, "é");
 
-      const ans = data.results[0]["correct_answer"];
+        const ans = data.results[0]["correct_answer"];
 
-      message.channel.send("qustion: " + q + "\nans with True/False");
+        message.channel.send("qustion: " + q + "\nans with True/False");
 
-      const masg_filter = m => m.author.id === message.author.id;
-      const waitans = await message.channel.awaitMessages({
-        filter: masg_filter,
-        max: 1
-      });
-      const uans = waitans.first();
-      if (uans.content === "True" || uans.content === "False") {
-        if (uans.content === ans) {
-          uans.reply("correct 😒");
+        const masg_filter = m => m.author.id === message.author.id;
+        const waitans = await message.channel.awaitMessages({
+          filter: masg_filter,
+          max: 1,
+          time: 60000,
+        });
+        const uans = waitans.first();
+        if (!uans) return;
+        if (uans.content === "True" || uans.content === "False") {
+          if (uans.content === ans) {
+            uans.reply("correct 😒");
+          }
+          else {
+            uans.reply("wrong 🤣");
+          }
         }
-        else {
-          uans.reply("wrong 🤣");
-        }
+      } catch (err) {
+        console.error(err);
       }
     }
   }
 
 
   if (msg.startsWith(chatPrefix)) {
+    if (message.author.bot) return;
+    const chatMsg = msg.replace(chatPrefix, "");
+    if (!GEMINI_API_KEY) return message.reply("Gemini API key not set 🥲");
+
     async function chatbot(prompt) {
       try {
-        // console.log("start search");
         const waitmsg = await message.reply("wait....");
-        const getresponse = await openai.createCompletion({
-          model: "text-davinci-003",
-          prompt: `${message.author.username}: ${prompt} \n\ ChatGPT:`,
-          temperature: 0.5,
-          max_tokens: 100,
-          top_p: 1,
-          stop: ["GPT3:", `${message.author.username}`],
-        });
-
-        if (getresponse) {
-          waitmsg.edit(`${getresponse.data.choices[0].text}`);
-        } else {
-          console.log("error in getresponce");
-          waitmsg.edit("soory we geting some error🥲");
-        }
-
-        return;
+        const reply = await geminiChat(`${message.author.username} says: ${prompt}`);
+        await waitmsg.edit(reply.slice(0, 2000));
       } catch (err) {
-        console.log(err);
+        console.error(err);
+        message.channel.send("soory we geting some error🥲").catch(() => {});
       }
-    }
-    const chatMsg = msg.replace("chat ", '')
-    if (message.author.bot) {
-      return;
     }
     return chatbot(chatMsg);
   }
 
-  // text to img img
+  // text to img
   if (msg.startsWith(imgPrefix)) {
+    if (message.author.bot) return;
+    const imgMsg = msg.replace(imgPrefix, "");
+    if (!GEMINI_API_KEY) return message.reply("Gemini API key not set 🥲");
 
     async function textToImg(prompt) {
       try {
-        // console.log("start search");
         const waitmsg = await message.reply("wait....");
-
-        const getresponse = await openai.createImage({
-          prompt: `${prompt}`,
-          n: 1,
-          size: "1024x1024",
-        });
-        let image_url = getresponse.data.data[0].url;
-
-        if (image_url) {
-          waitmsg.edit(`${image_url}`);
-        } else {
-          console.log("error in getresponce");
-          waitmsg.edit("soory we geting some error🥲");
-        }
-
-        return;
+        const imageBuffer = await geminiImage(prompt);
+        const attachment = new AttachmentBuilder(imageBuffer, { name: "image.png" });
+        await waitmsg.edit({ content: `here you go ${message.author} 🎨`, files: [attachment] });
       } catch (err) {
-        console.log(err);
+        console.error(err);
+        message.channel.send("soory we geting some error🥲").catch(() => {});
       }
-    }
-    const imgMsg = msg.replace("giveimg ", '')
-    if (message.author.bot) {
-      return;
     }
     return textToImg(imgMsg);
   }
-
-
-
 
   //end here msg create
 });

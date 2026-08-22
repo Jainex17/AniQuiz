@@ -1,40 +1,10 @@
 const { Events,EmbedBuilder} = require('discord.js');
 const quiz = require('../quiz.json');
 
-const Sequelize = require('sequelize');
-const sequelize = new Sequelize('database', 'username', 'password', {
-	host: 'localhost',
-	dialect: 'sqlite',
-	logging: false,
-	storage: 'database.sqlite',
-});
-const Tags = sequelize.define('tags', {
-	name: {
-		type: Sequelize.STRING,
-		unique: true,
-	},
-	description: Sequelize.TEXT,
-	username: Sequelize.STRING,
-	usage_count: {
-		type: Sequelize.INTEGER,
-		defaultValue: 0,
-		allowNull: false,
-	},
-});
-
-const { Client, GatewayIntentBits } = require('discord.js');
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent] });
-
 module.exports = {
 	name: Events.InteractionCreate,
 	async execute(interaction) {
 		if (!interaction.isChatInputCommand()) return;
-
-		client.once(Events.ClientReady, () => {
-			Tags.sync();
-		
-			console.log(`ok Logged in as ${client.user.tag}!`);
-		});
 
 		const command = interaction.client.commands.get(interaction.commandName);
 

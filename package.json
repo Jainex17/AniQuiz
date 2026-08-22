@@ -1,9 +1,17 @@
 {
+  "name": "aniquiz",
+  "version": "1.0.0",
+  "description": "Discord Anime quiz bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy-commands": "node deploy-commands.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "discord.js": "^14.7.1",
-    "express": "^4.18.2",
-    "openai": "^3.1.0",
-    "sequelize": "^6.28.0",
-    "sqlite3": "^5.1.4"
+    "discord.js": "^14.16.3",
+    "express": "^4.21.2"
   }
 }

@@ -17,7 +17,7 @@ module.exports = {
             { name: 'For Anime Quiz', value: 'let quiz' },
             { name: "For trivia", value: "let trivia" },
             { name: "For chat", value: "chat [your text]" },
-            { name: "For Text To Image", value: "getimg [your text]" },
+            { name: "For Text To Image", value: "giveimg [your text]" },
           )
         
         interaction.reply({ embeds: [helpEmbed], fetchReply: true });
