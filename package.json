@@ -8,11 +8,10 @@
     "deploy-commands": "node deploy-commands.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
-    "express": "^4.21.2",
-    "sqlite3": "^6.0.1"
+    "express": "^4.21.2"
   }
 }
