@@ -4,6 +4,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Client, Collection, GatewayIntentBits, AttachmentBuilder } = require("discord.js");
 const quiz = require("./quiz.json");
+const { createStore } = require("./store");
+const { buildSystemPrompt, buildContents } = require("./persona");
+const { rosterCache } = require("./events/ready");
+const { geminiChat, geminiImage } = require("./gemini");
+
+const store = createStore(process.env.DB_PATH || "aniquiz.db");
 
 // ---- config: env vars first (Render), config.json fallback (local dev) ----
 let token = process.env.DISCORD_TOKEN;
@@ -36,6 +42,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
   ],
 });
 
@@ -79,56 +86,18 @@ let prefix = "let ";
 let chatPrefix = "chat ";
 let imgPrefix = "giveimg ";
 
-// ---- gemini helpers (free tier, plain REST - no SDK needed) ----
-async function geminiChat(prompt) {
-  const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [
-            {
-              text: "You are Aniquiz, a friendly anime-loving Discord bot. Keep answers short and fun (max ~100 words).",
-            },
-          ],
-        },
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-      }),
-    }
-  );
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error(JSON.stringify(data).slice(0, 300));
-  return text;
-}
-
-async function geminiImage(prompt) {
-  const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-      }),
-    }
-  );
-  const data = await res.json();
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-  for (const part of parts) {
-    if (part.inlineData?.data) {
-      return Buffer.from(part.inlineData.data, "base64");
-    }
-  }
-  throw new Error(JSON.stringify(data).slice(0, 300));
+function requesterProfile(message) {
+  const member = message.member;
+  return {
+    name: member?.displayName || message.author.username,
+    roles: member?.roles?.cache
+      ? member.roles.cache
+          .filter((r) => r.name !== "@everyone")
+          .map((r) => r.name)
+          .slice(0, 10)
+      : [],
+    joined: member?.joinedAt ? member.joinedAt.toISOString().slice(0, 10) : null,
+  };
 }
 
 client.on("messageCreate", async (message) => {
@@ -140,6 +109,19 @@ client.on("messageCreate", async (message) => {
     if (command === "test") {
       message.reply("yea runing 😀");
     }
+
+    if (command === "forget") {
+      await store.clearUser(message.author.id);
+      message.reply("done, I forgot everything about you 🧹");
+    }
+
+    if (command === "remember") {
+      const fact = msg.slice(prefix.length + 9).trim();
+      if (!fact) return message.reply("give me something to remember! like: let remember my fav anime is FMAB");
+      await store.addFact(message.author.id, fact);
+      message.reply(`got it, I'll remember that ✨`);
+    }
+
     if (command === "quiz") {
       const item = quiz[Math.floor(Math.random() * quiz.length)];
       const filter = response => {
@@ -150,7 +132,9 @@ client.on("messageCreate", async (message) => {
         .then(() => {
           message.channel.awaitMessages({ filter, max: 1, time: 30000, errors: ['time'] })
             .then(collected => {
-              message.reply(`${collected.first().author} got the correct answer!`);
+              const winner = collected.first().author;
+              store.addScorePoint(winner.id, winner.username).catch(() => {});
+              message.reply(`${winner} got the correct answer! +1 point 🎉`);
             })
             .catch(collected => {
               message.reply('Looks like nobody got the answer this time.');
@@ -199,20 +183,37 @@ client.on("messageCreate", async (message) => {
 
   if (msg.startsWith(chatPrefix)) {
     if (message.author.bot) return;
-    const chatMsg = msg.replace(chatPrefix, "");
+    const chatMsg = msg.slice(chatPrefix.length).trim();
+    if (!chatMsg) return message.reply("talk to me! like: chat recommend an anime");
     if (!GEMINI_API_KEY) return message.reply("Gemini API key not set 🥲");
 
-    async function chatbot(prompt) {
+    async function chatbot() {
+      let waitmsg;
       try {
-        const waitmsg = await message.reply("wait....");
-        const reply = await geminiChat(`${message.author.username} says: ${prompt}`);
+        const requester = requesterProfile(message);
+        const [facts, history] = await Promise.all([
+          store.getFacts(message.author.id),
+          store.getHistory(message.author.id, 16),
+        ]);
+        const roster = rosterCache.get(message.guildId) || [];
+        const systemPrompt = buildSystemPrompt({ requester, roster, facts });
+        const contents = buildContents(history, `${requester.name}: ${chatMsg}`);
+
+        waitmsg = await message.reply("wait....");
+        const reply = await geminiChat(systemPrompt, contents);
+
+        await store.addMessage(message.author.id, message.channelId, "user", `${requester.name}: ${chatMsg}`);
+        await store.addMessage(message.author.id, message.channelId, "model", reply);
+        await store.trimHistory(message.author.id);
+
         await waitmsg.edit(reply.slice(0, 2000));
       } catch (err) {
         console.error(err);
-        message.channel.send("soory we geting some error🥲").catch(() => {});
+        if (waitmsg) waitmsg.edit("soory we geting some error🥲").catch(() => {});
+        else message.channel.send("soory we geting some error🥲").catch(() => {});
       }
     }
-    return chatbot(chatMsg);
+    return chatbot();
   }
 
   // text to img

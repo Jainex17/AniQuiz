@@ -1,5 +1,8 @@
 const { Events,EmbedBuilder} = require('discord.js');
 const quiz = require('../quiz.json');
+const { createStore } = require('../store');
+
+const store = createStore(process.env.DB_PATH || 'aniquiz.db');
 
 module.exports = {
 	name: Events.InteractionCreate,
@@ -51,7 +54,9 @@ module.exports = {
 						.then(() => {
 							interaction.channel.awaitMessages({ filter, max: 1, time: 30000, errors: ['time'] })
 								.then(collected => {
-									interaction.followUp(`${collected.first().author} got the correct answer!`);
+									const winner = collected.first().author;
+									store.addScorePoint(winner.id, winner.username).catch(() => {});
+									interaction.followUp(`${winner} got the correct answer! +1 point 🎉`);
 								})
 								.catch(collected => {
 									interaction.followUp('Looks like nobody got the answer this time 🤣');
