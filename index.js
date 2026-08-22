@@ -181,9 +181,10 @@ client.on("messageCreate", async (message) => {
   }
 
 
-  if (msg.startsWith(chatPrefix)) {
+  const usedChatPrefix = [chatPrefix, "c "].find((p) => msg.startsWith(p));
+  if (usedChatPrefix) {
     if (message.author.bot) return;
-    const chatMsg = msg.slice(chatPrefix.length).trim();
+    const chatMsg = msg.slice(usedChatPrefix.length).trim();
     if (!chatMsg) return message.reply("talk to me! like: chat recommend an anime");
     if (!GEMINI_API_KEY) return message.reply("Gemini API key not set 🥲");
 
